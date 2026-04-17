@@ -2,35 +2,92 @@
 #include <Arduino.h>
 
 #include "codec2.h"
+#include "hts1a.h"
+
+#define CODEC2_MODE CODEC2_MODE_2400
 
 CODEC2* codec2 = nullptr;
-volatile bool codec2_ready = false;
+short* pcm_buf = nullptr;
+uint8_t* enc_buf = nullptr;
+int nsam = 0;
+int nbyte = 0;
 
-void codec2_task(void* pv) {
-    codec2 = codec2_create(CODEC2_MODE_2400);
-    codec2_ready = true;
+static SemaphoreHandle_t c2_done;
+static SemaphoreHandle_t enc_start;
+static SemaphoreHandle_t enc_done;
+
+void codec2_init_task(void* pv) {
+    codec2 = codec2_create(CODEC2_MODE);
+
+    if (codec2) {
+        nsam = codec2_samples_per_frame(codec2);
+        int nbit = codec2_bits_per_frame(codec2);
+        nbyte = (nbit + 7) / 8;
+        pcm_buf = (short*)malloc(nsam * sizeof(short));
+        enc_buf = (uint8_t*)malloc(nbyte);
+        codec2_set_natural_or_gray(codec2, 0);
+    }
+
+    xSemaphoreGive(c2_done);
     vTaskDelete(NULL);
+}
+
+void codec2_encode_task(void* pv) {
+    while (true) {
+        xSemaphoreTake(enc_start, portMAX_DELAY);
+        codec2_encode(codec2, enc_buf, pcm_buf);
+        xSemaphoreGive(enc_done);
+    }
 }
 
 void setup() {
     Serial.begin(115200);
     while (!Serial) delay(10);
 
-    Serial.println("Starting codec2 init task...");
+    c2_done = xSemaphoreCreateBinary();
+    xTaskCreate(codec2_init_task, "c2init", 4096, NULL, 1, NULL);
+    xSemaphoreTake(c2_done, portMAX_DELAY);
+    vSemaphoreDelete(c2_done);
 
-    // Give this task 16KB of stack — plenty for nlp_create internals
-    xTaskCreate(
-        codec2_task,
-        "codec2init",
-        4096,  // stack in 32-bit words = 16KB
-        NULL,
-        1,
-        NULL);
-}
-
-void loop() {
-    if (codec2_ready && codec2) {
-        Serial.println("codec2_create OK");
-        codec2_ready = false;  // print once
+    if (!codec2 || !pcm_buf || !enc_buf) {
+        Serial.println("codec2 init failed");
+        return;
     }
+
+    // In setup(), before encoding:
+    Serial.print("FPU active: ");
+    Serial.println((SCB->CPACR & 0x00F00000) ? "YES" : "NO");
+
+    enc_start = xSemaphoreCreateBinary();
+    enc_done = xSemaphoreCreateBinary();
+    xTaskCreate(codec2_encode_task, "c2enc", 4096, NULL, 1, NULL);
+
+    int total_frames = hts1a_num_samples / nsam;
+    int sample_pos = 0;
+
+    Serial.print("Encoding ");
+    Serial.print(total_frames);
+    Serial.println(" frames...");
+
+    uint32_t t0 = millis();
+
+    for (int f = 0; f < total_frames; f++) {
+        for (int i = 0; i < nsam; i++)
+            pcm_buf[i] = hts1a_samples[sample_pos++];
+
+        xSemaphoreGive(enc_start);
+        xSemaphoreTake(enc_done, portMAX_DELAY);
+    }
+
+    uint32_t elapsed = millis() - t0;
+
+    Serial.print("Done. ");
+    Serial.print(total_frames);
+    Serial.print(" frames in ");
+    Serial.print(elapsed);
+    Serial.print(" ms (");
+    Serial.print((float)elapsed / total_frames, 2);
+    Serial.println(" ms/frame avg)");
 }
+
+void loop() {}
