@@ -295,7 +295,7 @@ void setup() {
     dec_start = xSemaphoreCreateBinary();
     dec_done = xSemaphoreCreateBinary();
     xTaskCreate(codec2_decode_task, "c2dec", 4096, NULL, 1, NULL);
-    raw_pkt_q = xQueueCreate(8, sizeof(RawPacket));
+    raw_pkt_q = xQueueCreate(300, sizeof(RawPacket));
     xTaskCreate(decode_task, "decode", 4096, NULL, 2, NULL);
     pcm_out_q = xQueueCreate(16, nsam * sizeof(short));
     xTaskCreate(serial_output_task, "serout", 4096, NULL, 1, NULL);
