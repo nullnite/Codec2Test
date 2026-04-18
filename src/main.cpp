@@ -158,6 +158,7 @@ void codec2_decode_task(void* pv) {
 }
 
 // Decode one packet into jitter buffer
+// After decoding each frame, also send raw PCM to serial:
 void process_rx_packet(uint8_t* data, int len) {
     int frames = len / nbyte;
     for (int f = 0; f < frames; f++) {
@@ -165,15 +166,18 @@ void process_rx_packet(uint8_t* data, int len) {
         xSemaphoreGive(dec_start);
         xSemaphoreTake(dec_done, portMAX_DELAY);
 
-        // pcm_buf now holds decoded frame — copy into jitter buffer
+        // Feed jitter buffer
         if (jitter_count < JITTER_FRAMES) {
             memcpy(jitter_buf[jitter_write], pcm_buf, nsam * sizeof(short));
             memcpy(last_frame, pcm_buf, nsam * sizeof(short));
             jitter_write = (jitter_write + 1) % JITTER_FRAMES;
             jitter_count++;
-        } else {
-            Serial.println("jitter overflow — dropping frame");
         }
+
+        // Stream raw PCM to serial for PC playback verification
+        Serial.write(0xFF);  // frame start marker
+        Serial.write(0xFE);  // second marker byte (0xFE unlikely in text)
+        Serial.write((uint8_t*)pcm_buf, nsam * sizeof(short));
     }
     if (!playing && jitter_count >= PREBUFFER_FRAMES)
         playing = true;
