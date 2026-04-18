@@ -63,6 +63,7 @@ static volatile int jitter_write = 0;
 static volatile int jitter_read = 0;
 static volatile int jitter_count = 0;
 static volatile bool playing = false;
+static SoftwareTimer audio_timer;
 
 static SemaphoreHandle_t rx_sem;
 static uint8_t rx_packet[FRAMES_PER_PACKET * 6];
@@ -82,11 +83,20 @@ void OnRxDone(uint8_t* payload, uint16_t size, int16_t rssi, int8_t snr) {
         rx_rssi = rssi;
         rx_snr = snr;
     }
+    // Re-arm immediately in the callback before giving semaphore
+    Radio.Rx(RX_TIMEOUT_VALUE);
     xSemaphoreGiveFromISR(rx_sem, NULL);
 }
 
-void OnRxTimeout(void) { xSemaphoreGiveFromISR(rx_sem, NULL); }
-void OnRxError(void) { xSemaphoreGiveFromISR(rx_sem, NULL); }
+void OnRxTimeout(void) {
+    Radio.Rx(RX_TIMEOUT_VALUE);
+    xSemaphoreGiveFromISR(rx_sem, NULL);
+}
+
+void OnRxError(void) {
+    Radio.Rx(RX_TIMEOUT_VALUE);
+    xSemaphoreGiveFromISR(rx_sem, NULL);
+}
 
 #endif
 
@@ -185,6 +195,17 @@ const short* get_next_audio_frame(void) {
     return last_frame;
 }
 
+void audio_timer_cb(TimerHandle_t xTimer) {
+    if (!playing) return;
+    const short* frame = get_next_audio_frame();
+    // TODO: send frame to I2S DAC here
+    // For now just track stats
+    static int frame_count = 0;
+    static int underruns = 0;
+    frame_count++;
+    // underrun detection already prints in get_next_audio_frame
+}
+
 #endif
 
 // ── LoRa init task (shared) ───────────────────────────────────────────────
@@ -256,7 +277,7 @@ void tx_task(void* pv) {
 #ifdef ROLE_RX
 
 void rx_task(void* pv) {
-    Radio.Rx(RX_TIMEOUT_VALUE);
+    Radio.Rx(RX_TIMEOUT_VALUE);  // initial arm only
     Serial.println("Listening...");
 
     while (true) {
@@ -269,20 +290,14 @@ void rx_task(void* pv) {
             process_rx_packet(rx_packet, rx_packet_len);
             rx_packet_len = 0;
 
-            // Print jitter buffer contents as hex for verification
-            // Remove this once audio output is wired up
             for (int f = 0; f < FRAMES_PER_PACKET; f++) {
-                uint8_t* frame = rx_packet + f * nbyte;  // already decoded above,
-                // so print PCM sample from jitter instead:
                 int slot = (jitter_write - FRAMES_PER_PACKET + f + JITTER_FRAMES) % JITTER_FRAMES;
                 Serial.printf("  frame %d: %d %d %d %d ...\n", f,
                               jitter_buf[slot][0], jitter_buf[slot][1],
                               jitter_buf[slot][2], jitter_buf[slot][3]);
             }
         }
-
-        // Re-arm receiver
-        Radio.Rx(RX_TIMEOUT_VALUE);
+        // No Radio.Rx() here — already re-armed in callback
     }
 }
 
@@ -340,6 +355,8 @@ void setup() {
 #else
     rx_sem = xSemaphoreCreateBinary();
     xTaskCreate(rx_task, "rx", 4096, NULL, 3, NULL);
+    audio_timer.begin(20, audio_timer_cb);
+    audio_timer.start();
 #endif
 }
 
