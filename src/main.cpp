@@ -4,7 +4,7 @@
 #include "codec2.h"
 #include "hts1a.h"
 
-#define ROLE_RX  // Change to ROLE_TX for the transmitter
+#define ROLE_TX  // Change to ROLE_TX for the transmitter
 
 #define CODEC2_MODE CODEC2_MODE_2400
 #define FRAMES_PER_PACKET 4
@@ -71,10 +71,15 @@ void fill_packet(uint8_t* pkt) {
 }
 
 void tx_task(void* pv) {
+    const TickType_t interval = pdMS_TO_TICKS(FRAMES_PER_PACKET * 20);
+    TickType_t last_wake = xTaskGetTickCount();
     fill_packet(pkt_buf[0]);
     int tx_idx = 0;
     int enc_idx = 1;
+    bool first = true;
     while (true) {
+        vTaskDelayUntil(&last_wake, interval);
+        if (first) { Serial.println("TX start"); first = false; }
         Radio.Send(pkt_buf[tx_idx], pkt_len);
         fill_packet(pkt_buf[enc_idx]);
         xSemaphoreTake(tx_sem, portMAX_DELAY);
