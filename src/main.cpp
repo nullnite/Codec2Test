@@ -4,7 +4,7 @@
 #include "codec2.h"
 #include "hts1a.h"
 
-#define ROLE_TX  // Change to ROLE_TX for the transmitter
+#define ROLE_TX
 
 #define CODEC2_MODE CODEC2_MODE_2400
 #define FRAMES_PER_PACKET 4
@@ -79,12 +79,16 @@ void tx_task(void* pv) {
     bool first = true;
     while (true) {
         vTaskDelayUntil(&last_wake, interval);
-        if (first) { Serial.println("TX start"); first = false; }
-        Radio.Send(pkt_buf[tx_idx], pkt_len);
-        fill_packet(pkt_buf[enc_idx]);
-        xSemaphoreTake(tx_sem, portMAX_DELAY);
-        tx_idx ^= 1;
-        enc_idx ^= 1;
+        if (digitalRead(WB_SW1) == LOW) {
+            if (first) { Serial.println("TX start"); first = false; }
+            Radio.Send(pkt_buf[tx_idx], pkt_len);
+            fill_packet(pkt_buf[enc_idx]);
+            xSemaphoreTake(tx_sem, portMAX_DELAY);
+            tx_idx ^= 1;
+            enc_idx ^= 1;
+        } else {
+            first = true;
+        }
     }
 }
 
@@ -269,6 +273,7 @@ void setup() {
 
 #ifdef ROLE_TX
     Serial.println("=== Codec2 LoRa TX ===");
+    pinMode(WB_SW1, INPUT_PULLUP);
 #else
     Serial.println("=== Codec2 LoRa RX ===");
 #endif
